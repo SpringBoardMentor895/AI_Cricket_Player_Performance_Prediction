@@ -82,9 +82,13 @@ def add_pvt_features(df: pd.DataFrame, deliveries: pd.DataFrame) -> pd.DataFrame
     """
     PvT = Player vs Team (batter vs bowling_team) historical avg runs (NO leakage)
     """
+    df = df.copy()
+
+    # Always create column
+    df["pvt_runs_avg"] = 0
+
+    # If bowling_team missing, return safely
     if "bowling_team" not in deliveries.columns:
-        # If bowling_team doesn't exist, create safe default
-        df["pvt_runs_avg"] = 0
         return df
 
     pvt_match = (
@@ -106,6 +110,7 @@ def add_pvt_features(df: pd.DataFrame, deliveries: pd.DataFrame) -> pd.DataFrame
         .agg(pvt_runs_avg=("pvt_runs_avg", "mean"))
     )
 
+    df = df.drop(columns=["pvt_runs_avg"], errors="ignore")
     df = df.merge(pvt_final, on=["match_id", "batter"], how="left")
     df["pvt_runs_avg"] = df["pvt_runs_avg"].fillna(0)
 
@@ -116,9 +121,13 @@ def add_pvp_features(df: pd.DataFrame, deliveries: pd.DataFrame) -> pd.DataFrame
     """
     PvP = Player vs Player (batter vs bowler) historical avg runs (NO leakage)
     """
+    df = df.copy()
+
+    # Always create column
+    df["pvp_runs_avg"] = 0
+
+    # If bowler missing, return safely
     if "bowler" not in deliveries.columns:
-        # If bowler doesn't exist, create safe default
-        df["pvp_runs_avg"] = 0
         return df
 
     pvp_match = (
@@ -140,10 +149,12 @@ def add_pvp_features(df: pd.DataFrame, deliveries: pd.DataFrame) -> pd.DataFrame
         .agg(pvp_runs_avg=("pvp_runs_avg", "mean"))
     )
 
+    df = df.drop(columns=["pvp_runs_avg"], errors="ignore")
     df = df.merge(pvp_final, on=["match_id", "batter"], how="left")
     df["pvp_runs_avg"] = df["pvp_runs_avg"].fillna(0)
 
     return df
+
 
 
 def add_next_match_label(df: pd.DataFrame) -> pd.DataFrame:
