@@ -23,8 +23,13 @@ matches = matches.drop_duplicates()
 
 
 ipl = ball.merge(matches[['id','date','venue','team1','team2','winner','toss_winner']], left_on='match_id', right_on='id')
+
+ipl.drop(columns=['id'],inplace=True)  # to drop the duplicate column in the new merged dataframe (ipl)
+ipl['extras_type'] = ipl['extras_type'].fillna('No Extra')
+ipl['dismissal_kind'] = ipl['dismissal_kind'].fillna('None')
+ipl['fielder'] = ipl['fielder'].fillna('None')
+
 ipl.to_csv("../data/cleaned/ipl_cleaned.csv",index=False)
 
 print("Data cleaning is completed!!")
 
-ipl.drop(columns=['id'],inplace=True)  # to drop the duplicate column in the new merged dataframe (ipl)
