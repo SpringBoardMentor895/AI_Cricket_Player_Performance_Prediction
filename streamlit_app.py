@@ -1,365 +1,177 @@
-# ============================================================
-# CRICKET PLAYER PERFORMANCE PREDICTION DASHBOARD + ANALYTICAL REPORT
-# ============================================================
-
 import streamlit as st
 import pandas as pd
-import joblib
-import shap
-import matplotlib.pyplot as plt
-import os
 import numpy as np
+import joblib
+import matplotlib.pyplot as plt
+import shap
 
-# ============================================================
+# -------------------------------------------------
 # PAGE CONFIG
-# ============================================================
-
+# -------------------------------------------------
 st.set_page_config(
     page_title="Cricket Player Performance Prediction",
     layout="wide"
 )
 
-st.title("CRICKET PLAYER PERFORMANCE PREDICTION")
+st.title("🏏 Cricket Player Performance Prediction (IPL)")
+st.write("Predict **Runs (Batsman)** or **Wickets (Bowler)** using Machine Learning")
 
-# ============================================================
+# -------------------------------------------------
 # LOAD DATA
-# ============================================================
+# -------------------------------------------------
+batsman_df = pd.read_csv("dataset.csv")
+bowler_df = pd.read_csv("dataset_bowler.csv")
 
-@st.cache_data
-def load_data():
-    return pd.read_csv("dataset.csv")
+batsman_df["date"] = pd.to_datetime(batsman_df["date"])
+bowler_df["date"] = pd.to_datetime(bowler_df["date"])
 
-data = load_data()
+# -------------------------------------------------
+# LOAD MODELS & PIPELINES
+# -------------------------------------------------
+batsman_model = joblib.load("xgb_model.joblib")
+batsman_preprocessor = joblib.load("feature_pipeline.pkl")
 
-# ============================================================
-# LOAD MODEL + PIPELINE
-# ============================================================
+bowler_model = joblib.load("bowler_model.joblib")
+bowler_preprocessor = joblib.load("feature_pipeline_bowler.pkl")
 
-@st.cache_resource
-def load_runs_model():
-    return joblib.load("xgb_model.joblib")
+# -------------------------------------------------
+# SIDEBAR INPUTS
+# -------------------------------------------------
+st.sidebar.header("Match Inputs")
 
-@st.cache_resource
-def load_pipeline():
-    return joblib.load("feature_pipeline.pkl")
-
-runs_model = load_runs_model()
-pipeline = load_pipeline()
-
-# Optional wickets model
-wickets_model = None
-if os.path.exists("model_wickets.pkl"):
-    wickets_model = joblib.load("model_wickets.pkl")
-
-# ============================================================
-# SHAP EXPLAINER (for runs)
-# ============================================================
-
-explainer_runs = shap.TreeExplainer(runs_model)
-
-# ============================================================
-# PIPELINE INPUT COLUMNS
-# ============================================================
-
-pipeline_cols = [
-    'batter',
-    'venue',
-    'opponent_team',
-    'runs_avg_last_5',
-    'runs_avg_last_10',
-    'venue_avg_runs',
-    'opponent_avg_runs',
-    'career_avg_runs',
-    'career_matches'
-]
-
-# ============================================================
-# SIDEBAR NAVIGATION
-# ============================================================
-
-page = st.sidebar.radio(
-    "Navigation",
-    ["Prediction Dashboard", "Analytical Report"]
+player_type = st.sidebar.radio(
+    "Select Player Type",
+    ["Batsman", "Bowler"]
 )
 
-# ============================================================
-# PREDICTION DASHBOARD
-# ============================================================
-
-if page == "Prediction Dashboard":
-
-    st.sidebar.header("Input Parameters")
-
-    players = sorted(data["batter"].unique())
-    venues = sorted(data["venue"].unique())
-    opponents = sorted(data["opponent_team"].unique())
-
-    # Store player selection in session_state
-    if 'pred_player_name' not in st.session_state:
-        st.session_state['pred_player_name'] = players[0]
-
-    pred_player_name = st.sidebar.selectbox(
-        "Select Player", players, index=players.index(st.session_state['pred_player_name'])
+# -------------------------------------------------
+# BATSMAN INPUTS
+# -------------------------------------------------
+if player_type == "Batsman":
+    player = st.sidebar.selectbox(
+        "Select Batsman",
+        sorted(batsman_df["batsman"].unique())
     )
-    st.session_state['pred_player_name'] = pred_player_name
 
-    venue = st.sidebar.selectbox("Select Venue", venues)
-    opponent = st.sidebar.selectbox("Select Opponent", opponents)
+    venue = st.sidebar.selectbox(
+        "Venue",
+        sorted(batsman_df["venue"].unique())
+    )
 
-    predict_btn = st.sidebar.button("Predict Performance")
+    team = st.sidebar.selectbox(
+        "Batting Team",
+        sorted(batsman_df["batting_team"].unique())
+    )
 
-    # --------------------------
-    # Get latest player record
-    # --------------------------
-    player_data = data[data["batter"] == pred_player_name]
-    latest_record = player_data.iloc[-1:].copy()
-    latest_record["venue"] = venue
-    latest_record["opponent_team"] = opponent
+# -------------------------------------------------
+# BOWLER INPUTS
+# -------------------------------------------------
+else:
+    player = st.sidebar.selectbox(
+        "Select Bowler",
+        sorted(bowler_df["bowler"].unique())
+    )
 
-    recent_data = player_data.tail(5)
+    venue = st.sidebar.selectbox(
+        "Venue",
+        sorted(bowler_df["venue"].unique())
+    )
 
-    if predict_btn:
+# -------------------------------------------------
+# PREDICTION
+# -------------------------------------------------
+if st.sidebar.button("Predict Performance"):
 
-        # --------------------------
-        # Prepare input
-        # --------------------------
-        X = latest_record[pipeline_cols]
-        X_processed = pipeline.transform(X)
-
-        # ====================================================
-        # MAIN 2 COLUMNS
-        # ====================================================
-        col1, col2 = st.columns(2)
-
-        # --------------------------
-        # LEFT COLUMN: Predicted Runs + Player Form
-        # --------------------------
-        with col1:
-            st.subheader("Predicted Runs")
-            predicted_runs = int(runs_model.predict(X_processed)[0])
-            st.markdown(
-                f"<h1 style='color:black; font-weight:bold;'>{predicted_runs}</h1>", unsafe_allow_html=True
-            )
-
-            st.subheader("Player Form")
-            fig_form, ax_form = plt.subplots()
-            ax_form.plot(
-                range(1, len(recent_data) + 1),
-                recent_data["target_runs_next_match"],
-                marker='o',
-                color='blue'
-            )
-            ax_form.set_xlabel("Recent Matches")
-            ax_form.set_ylabel("Runs")
-            st.pyplot(fig_form)
-            plt.clf()
-
-        # --------------------------
-        # RIGHT COLUMN: Predicted Wickets + SHAP
-        # --------------------------
-        with col2:
-            st.subheader("Predicted Wickets")
-            if wickets_model is not None:
-                try:
-                    wickets = wickets_model.predict(X_processed)[0]
-                    st.markdown(
-                        f"<h1 style='color:#4B0082; font-weight:bold;'>{round(wickets,2)}</h1>",
-                        unsafe_allow_html=True
-                    )
-                except:
-                    st.write("--")
-            else:
-                st.write("--")
-
-            # SHAP Explanation
-            st.subheader("SHAP Explanation Importance for this Match")
-            try:
-                numeric_features = [
-                    'career_avg_runs',
-                    'venue_avg_runs',
-                    'opponent_avg_runs',
-                    'runs_avg_last_10',
-                    'runs_avg_last_5',
-                    'career_matches'
-                ]
-
-                feature_names_pipeline = (
-                    pipeline.get_feature_names_out()
-                    if hasattr(pipeline, "get_feature_names_out") else None
-                )
-
-                if hasattr(X_processed, "toarray"):
-                    X_dense = X_processed.toarray()
-                else:
-                    X_dense = X_processed
-
-                shap_values_full = explainer_runs(X_dense)
-
-                shap_dict = {}
-                for f in numeric_features:
-                    if feature_names_pipeline is not None:
-                        idxs = [i for i, name in enumerate(feature_names_pipeline) if f in name]
-                        shap_dict[f] = shap_values_full[0].values[idxs].sum()
-                    else:
-                        shap_dict[f] = shap_values_full[0].values[0]
-
-                shap_numeric = shap.Explanation(
-                    values=np.array(list(shap_dict.values())),
-                    base_values=shap_values_full[0].base_values,
-                    data=np.array([latest_record[f].values[0] for f in numeric_features]),
-                    feature_names=numeric_features
-                )
-
-                fig_shap, ax_shap = plt.subplots(figsize=(8,5))
-                shap.plots.waterfall(shap_numeric, show=False)
-                st.pyplot(fig_shap)
-                plt.clf()
-
-            except Exception as e:
-                st.write("SHAP plot not available:", e)
-
-    else:
-        st.info("Click Predict Performance")
-
-# ============================================================
-# ANALYTICAL REPORT
-# ============================================================
-
-if page == "Analytical Report":
-
-    st.title("CRICKET PLAYER PERFORMANCE ANALYTICAL REPORT")
-
-    # --------------------------
-    # SAMPLE PREDICTIONS (Random sample)
-    # --------------------------
-    st.subheader("Sample Predictions")
-    sample_df = data.sample(30)
-    X_sample = sample_df[pipeline_cols]
-    y_actual_sample = sample_df["target_runs_next_match"]
-    y_pred_sample = runs_model.predict(pipeline.transform(X_sample))
-    sample_df["Predicted Runs"] = y_pred_sample
-
-    st.dataframe(sample_df[[
-        "batter",
-        "venue",
-        "opponent_team",
-        "target_runs_next_match",
-        "Predicted Runs"
-    ]])
-
-    # --------------------------
-    # DASHBOARD-SELECTED PLAYER ANALYTICS
-    # --------------------------
-    if 'pred_player_name' in st.session_state:
-        player_name = st.session_state['pred_player_name']
-    else:
-        st.warning("Please select a player in Prediction Dashboard first")
-        st.stop()
-
-    player_data_full = data[data["batter"] == player_name]
-
-    if not player_data_full.empty:
-
-        # LAST 10 MATCHES FORM
-        st.subheader(f"{player_name} - Last 10 Matches Form")
-        player_last10 = player_data_full.tail(10)
-        fig_form, ax_form = plt.subplots()
-        ax_form.plot(
-            range(1, len(player_last10)+1),
-            player_last10["target_runs_next_match"],
-            marker='o',
-            color='blue'
+    # ==========================
+    # BATSMAN PREDICTION
+    # ==========================
+    if player_type == "Batsman":
+        row = (
+            batsman_df[batsman_df["batsman"] == player]
+            .sort_values("date")
+            .iloc[-1]
         )
-        ax_form.set_xlabel("Matches")
-        ax_form.set_ylabel("Runs")
-        ax_form.set_title(f"{player_name} - Last 10 Matches")
-        st.pyplot(fig_form)
-        plt.clf()
 
-        # ACTUAL VS PREDICTED RUNS
-        st.subheader(f"{player_name} - Actual vs Predicted Runs")
-        X_player = player_data_full[pipeline_cols]
-        y_actual_player = player_data_full["target_runs_next_match"]
-        y_pred_player = runs_model.predict(pipeline.transform(X_player))
+        input_df = pd.DataFrame([{
+            "avg_runs_last_5": row["avg_runs_last_5"],
+            "avg_runs_last_10": row["avg_runs_last_10"],
+            "venue_avg_runs": row["venue_avg_runs"],
+            "career_avg_runs": row["career_avg_runs"],
+            "career_matches": row["career_matches"],
+            "pvt_avg_runs": row["pvt_avg_runs"],
+            "pvp_avg_runs": row["pvp_avg_runs"],
+            "venue": venue,
+            "batting_team": team
+        }])
 
-        fig_scatter, ax_scatter = plt.subplots()
-        ax_scatter.scatter(y_actual_player, y_pred_player, color='green')
-        ax_scatter.plot(
-            [y_actual_player.min(), y_actual_player.max()],
-            [y_actual_player.min(), y_actual_player.max()],
-            linestyle="--",
-            color='red'
+        X = batsman_preprocessor.transform(input_df)
+        prediction = batsman_model.predict(X)[0]
+
+        st.subheader("📊 Predicted Runs")
+        st.metric("Expected Runs", f"{prediction:.1f}")
+
+        # -------- Player Form --------
+        st.subheader("📈 Player Form (Last 10 Matches)")
+        recent = (
+            batsman_df[batsman_df["batsman"] == player]
+            .sort_values("date")
+            .tail(10)
         )
-        ax_scatter.set_xlabel("Actual Runs")
-        ax_scatter.set_ylabel("Predicted Runs")
-        st.pyplot(fig_scatter)
-        plt.clf()
 
-        # PLAYER PREDICTION EXPLANATION (SHAP Waterfall)
-        st.subheader(f"{player_name} - Prediction Explanation (SHAP Waterfall)")
-        try:
-            player_row = player_data_full.tail(1)
-            X_row = player_row[pipeline_cols]
-            X_processed_row = pipeline.transform(X_row)
-            shap_values_row = explainer_runs(X_processed_row)
+        fig, ax = plt.subplots()
+        ax.plot(recent["date"], recent["runs"], marker="o")
+        ax.set_xlabel("Date")
+        ax.set_ylabel("Runs")
+        st.pyplot(fig)
 
-            feature_names_pipeline = (
-                pipeline.get_feature_names_out() if hasattr(pipeline, "get_feature_names_out") else None
-            )
+        # -------- SHAP --------
+        st.subheader("🔍 Feature Importance (SHAP)")
+        explainer = shap.TreeExplainer(batsman_model)
+        shap_values = explainer.shap_values(X)
 
-            numeric_features = [
-                'career_avg_runs',
-                'venue_avg_runs',
-                'opponent_avg_runs',
-                'runs_avg_last_10',
-                'runs_avg_last_5',
-                'career_matches'
-            ]
-            numeric_features_existing = [f for f in numeric_features if f in X_row.columns]
+        fig2 = plt.figure()
+        shap.summary_plot(
+            shap_values,
+            X,
+            feature_names=batsman_preprocessor.get_feature_names_out(),
+            plot_type="bar",
+            show=False
+        )
+        st.pyplot(fig2)
 
-            shap_dict = {}
-            for f in numeric_features_existing:
-                if feature_names_pipeline is not None:
-                    idxs = [i for i, name in enumerate(feature_names_pipeline) if f in name]
-                    shap_dict[f] = shap_values_row[0].values[idxs].sum()
-                else:
-                    shap_dict[f] = shap_values_row[0].values[0]
+    # ==========================
+    # BOWLER PREDICTION
+    # ==========================
+    else:
+        row = (
+            bowler_df[bowler_df["bowler"] == player]
+            .sort_values("date")
+            .iloc[-1]
+        )
 
-            shap_explanation = shap.Explanation(
-                values=np.array(list(shap_dict.values())),
-                base_values=shap_values_row[0].base_values,
-                data=np.array([X_row[f].values[0] for f in numeric_features_existing]),
-                feature_names=numeric_features_existing
-            )
+        input_df = pd.DataFrame([{
+            "balls": row["balls"],
+            "runs_conceded": row["runs_conceded"],
+            "economy": row["economy"],
+            "venue": venue
+        }])
 
-            fig_shap, ax_shap = plt.subplots(figsize=(8,5))
-            shap.plots.waterfall(shap_explanation, show=False)
-            st.pyplot(fig_shap)
-            plt.clf()
+        X = bowler_preprocessor.transform(input_df)
+        prediction = bowler_model.predict(X)[0]
 
-            # SHAP FEATURE IMPORTANCE (Bar Chart)
-            st.subheader(f"{player_name} - SHAP Feature Importance (Bar Chart)")
-            shap_abs = np.abs(shap_explanation.values)
-            feature_names = shap_explanation.feature_names
+        st.subheader("📊 Predicted Wickets")
+        st.metric("Expected Wickets", f"{prediction:.2f}")
 
-            fig_bar, ax_bar = plt.subplots(figsize=(8,5))
-            ax_bar.barh(feature_names, shap_abs, color='orange')
-            ax_bar.set_xlabel("Absolute SHAP Value")
-            ax_bar.set_title("Feature Contribution for this Prediction")
-            ax_bar.invert_yaxis()
-            st.pyplot(fig_bar)
-            plt.clf()
+        # -------- Bowler Form --------
+        st.subheader("📈 Bowler Form (Last 10 Matches)")
+        recent = (
+            bowler_df[bowler_df["bowler"] == player]
+            .sort_values("date")
+            .tail(10)
+        )
 
-        except Exception as e:
-            st.write("Player SHAP explanation not available:", e)
-
-        # RESIDUALS vs PREDICTED
-        st.subheader(f"{player_name} - Residuals vs Predicted Runs")
-        residuals = y_actual_player - y_pred_player
-        fig_resid, ax_resid = plt.subplots()
-        ax_resid.scatter(y_pred_player, residuals, color='purple')
-        ax_resid.axhline(0, linestyle="--", color='black')
-        ax_resid.set_xlabel("Predicted Runs")
-        ax_resid.set_ylabel("Residuals")
-        st.pyplot(fig_resid)
-        plt.clf()
+        fig, ax = plt.subplots()
+        ax.plot(recent["date"], recent["wickets"], marker="o")
+        ax.set_xlabel("Date")
+        ax.set_ylabel("Wickets")
+        st.pyplot(fig)
