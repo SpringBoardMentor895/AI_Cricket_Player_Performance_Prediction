@@ -1,4 +1,19 @@
-.ipynb_checkpoints/
+# Python
 __pycache__/
 *.pyc
-data/processed/*.csv
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment
+env/
+venv/
+*.env
+
+# Streamlit
+.streamlit/
+
+# System
+.DS_Store
+Thumbs.db
+
