@@ -1,365 +1,591 @@
-# ============================================================
-# CRICKET PLAYER PERFORMANCE PREDICTION DASHBOARD + ANALYTICAL REPORT
-# ============================================================
+# ==========================================================
+# AI CRICKET PERFORMANCE PREDICTION - PRODUCTION VERSION
+# ==========================================================
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 import joblib
 import shap
-import matplotlib.pyplot as plt
-import os
-import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+from scipy.stats import norm
 
-# ============================================================
+# ----------------------------------------------------------
 # PAGE CONFIG
-# ============================================================
-
+# ----------------------------------------------------------
 st.set_page_config(
-    page_title="Cricket Player Performance Prediction",
+    page_title="AI Cricket Performance",
+    page_icon="🏏",
     layout="wide"
 )
 
-st.title("CRICKET PLAYER PERFORMANCE PREDICTION")
+# ----------------------------------------------------------
+# DARK PROFESSIONAL UI
+# ----------------------------------------------------------
+st.markdown("""
+<style>
+[data-testid="stAppViewContainer"] {
+    background-color: #0f172a;
+}
+h1, h2, h3, h4 {
+    color: #e2e8f0;
+}
+.card {
+    padding: 30px;
+    border-radius: 18px;
+    color: white;
+    font-size: 30px;
+    font-weight: bold;
+    text-align: center;
+    transition: 0.3s;
+}
+.card:hover {
+    transform: scale(1.05);
+}
+.runs-card {
+    background: linear-gradient(135deg,#2563eb,#06b6d4);
+}
+.wicket-card {
+    background: linear-gradient(135deg,#7c3aed,#ec4899);
+}
+.info-box {
+    background:#111827;
+    padding:20px;
+    border-radius:15px;
+}
+</style>
+""", unsafe_allow_html=True)
 
-# ============================================================
+st.title("🏏 AI Cricket Player Performance System")
+
+# ----------------------------------------------------------
 # LOAD DATA
-# ============================================================
-
+# ----------------------------------------------------------
 @st.cache_data
 def load_data():
-    return pd.read_csv("dataset.csv")
+    batsman_df = pd.read_csv("data/processed/batsman_model_data.csv")
+    bowler_df = pd.read_csv("data/processed/bowler_model_data.csv")
+    return batsman_df, bowler_df
 
-data = load_data()
+batsman_df, bowler_df = load_data()
 
-# ============================================================
-# LOAD MODEL + PIPELINE
-# ============================================================
-
+# ----------------------------------------------------------
+# LOAD MODELS & PIPELINES
+# ----------------------------------------------------------
 @st.cache_resource
-def load_runs_model():
-    return joblib.load("xgb_model.joblib")
+def load_models():
+    runs_model = joblib.load("model/xgb_batsman_model.joblib")
+    runs_pipeline = joblib.load("model/feature_pipeline_batsman.pkl")
 
-@st.cache_resource
-def load_pipeline():
-    return joblib.load("feature_pipeline.pkl")
+    wickets_model = joblib.load("model/rf_wickets_model.joblib")
+    wickets_pipeline = joblib.load("model/feature_pipeline_bowler.pkl")
 
-runs_model = load_runs_model()
-pipeline = load_pipeline()
+    return runs_model, runs_pipeline, wickets_model, wickets_pipeline
 
-# Optional wickets model
-wickets_model = None
-if os.path.exists("model_wickets.pkl"):
-    wickets_model = joblib.load("model_wickets.pkl")
+runs_model, runs_pipeline, wickets_model, wickets_pipeline = load_models()
 
-# ============================================================
-# SHAP EXPLAINER (for runs)
-# ============================================================
+# ----------------------------------------------------------
+# HELPER FUNCTIONS
+# ----------------------------------------------------------
+def compute_uncertainty(model, pipeline, df, target_col):
+    X = df.drop(columns=[target_col])
+    y = df[target_col]
+    X_processed = pipeline.transform(X)
+    y_pred = model.predict(X_processed)
+    residuals = y - y_pred
+    return np.std(residuals)
 
-explainer_runs = shap.TreeExplainer(runs_model)
 
-# ============================================================
-# PIPELINE INPUT COLUMNS
-# ============================================================
+def shap_local_explanation(model, pipeline, X_processed):
+    if hasattr(X_processed, "toarray"):
+        X_processed = X_processed.toarray()
 
-pipeline_cols = [
-    'batter',
-    'venue',
-    'opponent_team',
-    'runs_avg_last_5',
-    'runs_avg_last_10',
-    'venue_avg_runs',
-    'opponent_avg_runs',
-    'career_avg_runs',
-    'career_matches'
-]
+    explainer = shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(X_processed)
 
-# ============================================================
-# SIDEBAR NAVIGATION
-# ============================================================
+    feature_names = pipeline.get_feature_names_out()
 
-page = st.sidebar.radio(
-    "Navigation",
-    ["Prediction Dashboard", "Analytical Report"]
-)
+    numeric_indices = [
+        i for i, name in enumerate(feature_names)
+        if name.startswith("num__")
+    ]
 
-# ============================================================
-# PREDICTION DASHBOARD
-# ============================================================
+    shap_vals = shap_values[0][numeric_indices]
+    clean_names = [
+        feature_names[i].replace("num__", "")
+        for i in numeric_indices
+    ]
 
-if page == "Prediction Dashboard":
+    shap_df = pd.DataFrame({
+        "Feature": clean_names,
+        "Impact": shap_vals
+    }).sort_values(by="Impact", key=abs, ascending=False).head(10)
 
-    st.sidebar.header("Input Parameters")
-
-    players = sorted(data["batter"].unique())
-    venues = sorted(data["venue"].unique())
-    opponents = sorted(data["opponent_team"].unique())
-
-    # Store player selection in session_state
-    if 'pred_player_name' not in st.session_state:
-        st.session_state['pred_player_name'] = players[0]
-
-    pred_player_name = st.sidebar.selectbox(
-        "Select Player", players, index=players.index(st.session_state['pred_player_name'])
+    fig = px.bar(
+        shap_df,
+        x="Impact",
+        y="Feature",
+        orientation="h",
+        template="plotly_dark",
+        title="Top Feature Contributions"
     )
-    st.session_state['pred_player_name'] = pred_player_name
 
-    venue = st.sidebar.selectbox("Select Venue", venues)
-    opponent = st.sidebar.selectbox("Select Opponent", opponents)
+    return fig
 
-    predict_btn = st.sidebar.button("Predict Performance")
 
-    # --------------------------
-    # Get latest player record
-    # --------------------------
-    player_data = data[data["batter"] == pred_player_name]
-    latest_record = player_data.iloc[-1:].copy()
-    latest_record["venue"] = venue
-    latest_record["opponent_team"] = opponent
+def probability_distribution(prediction, std_dev, label):
+    x_range = np.linspace(
+        prediction - 4 * std_dev,
+        prediction + 4 * std_dev,
+        500
+    )
 
-    recent_data = player_data.tail(5)
+    pdf = norm.pdf(x_range, prediction, std_dev)
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=x_range,
+        y=pdf,
+        mode="lines",
+        fill="tozeroy",
+        name="Density"
+    ))
+
+    fig.add_vline(
+        x=prediction,
+        line_dash="dash",
+        annotation_text="Prediction"
+    )
+
+    lower = prediction - 1.96 * std_dev
+    upper = prediction + 1.96 * std_dev
+
+    fig.add_vrect(
+        x0=lower,
+        x1=upper,
+        fillcolor="rgba(0,255,150,0.15)",
+        line_width=0,
+        annotation_text="95% CI"
+    )
+
+    fig.update_layout(
+        template="plotly_dark",
+        title=f"{label} Prediction Distribution",
+        xaxis_title=label,
+        yaxis_title="Density",
+        height=500
+    )
+
+    return fig, lower, upper
+
+# ----------------------------------------------------------
+# RESIDUAL PLOT
+# ----------------------------------------------------------
+def residual_plot(model, pipeline, df, target_col):
+
+    X = df.drop(columns=[target_col])
+    y = df[target_col]
+
+    X_processed = pipeline.transform(X)
+
+    if hasattr(X_processed, "toarray"):
+        X_processed = X_processed.toarray()
+
+    preds = model.predict(X_processed)
+    residuals = y.values - preds
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=preds,
+        y=residuals,
+        mode="markers",
+        opacity=0.6,
+        name="Residuals"
+    ))
+
+    fig.add_hline(
+        y=0,
+        line_dash="dash",
+        line_color="red"
+    )
+
+    fig.update_layout(
+        template="plotly_dark",
+        title="Residual Analysis (Predicted vs Residuals)",
+        xaxis_title="Predicted Values",
+        yaxis_title="Residuals",
+        height=450
+    )
+
+    return fig
+
+# ----------------------------------------------------------
+# SHAP GLOBAL IMPORTANCE (BEESWARM STYLE)
+# ----------------------------------------------------------
+def shap_beeswarm_plot(model, pipeline, df, target_col):
+
+    X = df.drop(columns=[target_col])
+    X_processed = pipeline.transform(X)
+
+    if hasattr(X_processed, "toarray"):
+        X_processed = X_processed.toarray()
+
+    explainer = shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(X_processed)
+
+    feature_names = pipeline.get_feature_names_out()
+
+    numeric_indices = [
+        i for i, name in enumerate(feature_names)
+        if name.startswith("num__")
+    ]
+
+    shap_array = shap_values[:, numeric_indices]
+    clean_names = [
+        feature_names[i].replace("num__", "")
+        for i in numeric_indices
+    ]
+
+    mean_importance = np.abs(shap_array).mean(axis=0)
+
+    shap_df = pd.DataFrame({
+        "Feature": clean_names,
+        "Mean_Impact": mean_importance
+    }).sort_values(by="Mean_Impact", ascending=True)
+
+    fig = px.bar(
+        shap_df,
+        x="Mean_Impact",
+        y="Feature",
+        orientation="h",
+        template="plotly_dark",
+        title="Global Feature Importance (Mean |SHAP|)"
+    )
+
+    fig.update_layout(height=600)
+
+    return fig
+
+
+
+# ----------------------------------------------------------
+# NAVIGATION
+# ----------------------------------------------------------
+tab1, tab2, tab3 = st.tabs([
+    "🏠 Overview",
+    "📊 Prediction",
+    "📈 Analytics"
+])
+
+# ==========================================================
+# OVERVIEW
+# ==========================================================
+with tab1:
+    st.markdown("""
+    ### Intelligent Cricket Performance Forecasting System
+
+    This dashboard predicts:
+
+    - 🔵 Runs (XGBoost Model)
+    - 🟣 Wickets (Random Forest Model)
+
+    Includes:
+    - Feature engineered rolling stats
+    - Venue averages
+    - Player vs Player stats
+    - SHAP explainability
+    - Prediction uncertainty modeling
+    """)
+
+
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib import colors
+from reportlab.lib.units import inch
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import Table, TableStyle
+from io import BytesIO
+
+# ==========================================================
+# PREDICTION TAB
+# ==========================================================
+with tab2:
+
+    st.markdown("""
+    <style>
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.markdown("## 🎯 Match Context Selection")
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    col1, col2, col3 = st.columns([1,1,1])
+
+    with col1:
+        role = st.selectbox("Role", ["Batsman", "Bowler"])
+
+    if role == "Batsman":
+        player_list = sorted(batsman_df["batter"].unique())
+        venue_list = sorted(batsman_df["venue"].unique())
+    else:
+        player_list = sorted(bowler_df["bowler"].unique())
+        venue_list = sorted(bowler_df["venue"].unique())
+
+    with col2:
+        player = st.selectbox("Player", player_list)
+
+    with col3:
+        venue = st.selectbox("Venue", venue_list)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    c1, c2, c3 = st.columns([2,1,2])
+    with c2:
+        predict_btn = st.button("🚀 Predict Performance", use_container_width=True)
+
+    st.markdown("<hr>", unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
 
     if predict_btn:
 
-        # --------------------------
-        # Prepare input
-        # --------------------------
-        X = latest_record[pipeline_cols]
-        X_processed = pipeline.transform(X)
-
-        # ====================================================
-        # MAIN 2 COLUMNS
-        # ====================================================
-        col1, col2 = st.columns(2)
-
-        # --------------------------
-        # LEFT COLUMN: Predicted Runs + Player Form
-        # --------------------------
-        with col1:
-            st.subheader("Predicted Runs")
-            predicted_runs = int(runs_model.predict(X_processed)[0])
-            st.markdown(
-                f"<h1 style='color:black; font-weight:bold;'>{predicted_runs}</h1>", unsafe_allow_html=True
-            )
-
-            st.subheader("Player Form")
-            fig_form, ax_form = plt.subplots()
-            ax_form.plot(
-                range(1, len(recent_data) + 1),
-                recent_data["target_runs_next_match"],
-                marker='o',
-                color='blue'
-            )
-            ax_form.set_xlabel("Recent Matches")
-            ax_form.set_ylabel("Runs")
-            st.pyplot(fig_form)
-            plt.clf()
-
-        # --------------------------
-        # RIGHT COLUMN: Predicted Wickets + SHAP
-        # --------------------------
-        with col2:
-            st.subheader("Predicted Wickets")
-            if wickets_model is not None:
-                try:
-                    wickets = wickets_model.predict(X_processed)[0]
-                    st.markdown(
-                        f"<h1 style='color:#4B0082; font-weight:bold;'>{round(wickets,2)}</h1>",
-                        unsafe_allow_html=True
-                    )
-                except:
-                    st.write("--")
-            else:
-                st.write("--")
-
-            # SHAP Explanation
-            st.subheader("SHAP Explanation Importance for this Match")
-            try:
-                numeric_features = [
-                    'career_avg_runs',
-                    'venue_avg_runs',
-                    'opponent_avg_runs',
-                    'runs_avg_last_10',
-                    'runs_avg_last_5',
-                    'career_matches'
-                ]
-
-                feature_names_pipeline = (
-                    pipeline.get_feature_names_out()
-                    if hasattr(pipeline, "get_feature_names_out") else None
-                )
-
-                if hasattr(X_processed, "toarray"):
-                    X_dense = X_processed.toarray()
-                else:
-                    X_dense = X_processed
-
-                shap_values_full = explainer_runs(X_dense)
-
-                shap_dict = {}
-                for f in numeric_features:
-                    if feature_names_pipeline is not None:
-                        idxs = [i for i, name in enumerate(feature_names_pipeline) if f in name]
-                        shap_dict[f] = shap_values_full[0].values[idxs].sum()
-                    else:
-                        shap_dict[f] = shap_values_full[0].values[0]
-
-                shap_numeric = shap.Explanation(
-                    values=np.array(list(shap_dict.values())),
-                    base_values=shap_values_full[0].base_values,
-                    data=np.array([latest_record[f].values[0] for f in numeric_features]),
-                    feature_names=numeric_features
-                )
-
-                fig_shap, ax_shap = plt.subplots(figsize=(8,5))
-                shap.plots.waterfall(shap_numeric, show=False)
-                st.pyplot(fig_shap)
-                plt.clf()
-
-            except Exception as e:
-                st.write("SHAP plot not available:", e)
-
-    else:
-        st.info("Click Predict Performance")
-
-# ============================================================
-# ANALYTICAL REPORT
-# ============================================================
-
-if page == "Analytical Report":
-
-    st.title("CRICKET PLAYER PERFORMANCE ANALYTICAL REPORT")
-
-    # --------------------------
-    # SAMPLE PREDICTIONS (Random sample)
-    # --------------------------
-    st.subheader("Sample Predictions")
-    sample_df = data.sample(30)
-    X_sample = sample_df[pipeline_cols]
-    y_actual_sample = sample_df["target_runs_next_match"]
-    y_pred_sample = runs_model.predict(pipeline.transform(X_sample))
-    sample_df["Predicted Runs"] = y_pred_sample
-
-    st.dataframe(sample_df[[
-        "batter",
-        "venue",
-        "opponent_team",
-        "target_runs_next_match",
-        "Predicted Runs"
-    ]])
-
-    # --------------------------
-    # DASHBOARD-SELECTED PLAYER ANALYTICS
-    # --------------------------
-    if 'pred_player_name' in st.session_state:
-        player_name = st.session_state['pred_player_name']
-    else:
-        st.warning("Please select a player in Prediction Dashboard first")
-        st.stop()
-
-    player_data_full = data[data["batter"] == player_name]
-
-    if not player_data_full.empty:
-
-        # LAST 10 MATCHES FORM
-        st.subheader(f"{player_name} - Last 10 Matches Form")
-        player_last10 = player_data_full.tail(10)
-        fig_form, ax_form = plt.subplots()
-        ax_form.plot(
-            range(1, len(player_last10)+1),
-            player_last10["target_runs_next_match"],
-            marker='o',
-            color='blue'
-        )
-        ax_form.set_xlabel("Matches")
-        ax_form.set_ylabel("Runs")
-        ax_form.set_title(f"{player_name} - Last 10 Matches")
-        st.pyplot(fig_form)
-        plt.clf()
-
-        # ACTUAL VS PREDICTED RUNS
-        st.subheader(f"{player_name} - Actual vs Predicted Runs")
-        X_player = player_data_full[pipeline_cols]
-        y_actual_player = player_data_full["target_runs_next_match"]
-        y_pred_player = runs_model.predict(pipeline.transform(X_player))
-
-        fig_scatter, ax_scatter = plt.subplots()
-        ax_scatter.scatter(y_actual_player, y_pred_player, color='green')
-        ax_scatter.plot(
-            [y_actual_player.min(), y_actual_player.max()],
-            [y_actual_player.min(), y_actual_player.max()],
-            linestyle="--",
-            color='red'
-        )
-        ax_scatter.set_xlabel("Actual Runs")
-        ax_scatter.set_ylabel("Predicted Runs")
-        st.pyplot(fig_scatter)
-        plt.clf()
-
-        # PLAYER PREDICTION EXPLANATION (SHAP Waterfall)
-        st.subheader(f"{player_name} - Prediction Explanation (SHAP Waterfall)")
-        try:
-            player_row = player_data_full.tail(1)
-            X_row = player_row[pipeline_cols]
-            X_processed_row = pipeline.transform(X_row)
-            shap_values_row = explainer_runs(X_processed_row)
-
-            feature_names_pipeline = (
-                pipeline.get_feature_names_out() if hasattr(pipeline, "get_feature_names_out") else None
-            )
-
-            numeric_features = [
-                'career_avg_runs',
-                'venue_avg_runs',
-                'opponent_avg_runs',
-                'runs_avg_last_10',
-                'runs_avg_last_5',
-                'career_matches'
+        if role == "Batsman":
+            df = batsman_df[
+                (batsman_df["batter"] == player) &
+                (batsman_df["venue"] == venue)
             ]
-            numeric_features_existing = [f for f in numeric_features if f in X_row.columns]
+            target_col = "runs_next_match"
+            model = runs_model
+            pipeline = runs_pipeline
+            label = "Runs"
+            card_title = "Predicted Runs"
+            gradient = "linear-gradient(135deg,#2563eb,#06b6d4)"
+        else:
+            df = bowler_df[
+                (bowler_df["bowler"] == player) &
+                (bowler_df["venue"] == venue)
+            ]
+            target_col = "wickets_next_match"
+            model = wickets_model
+            pipeline = wickets_pipeline
+            label = "Wickets"
+            card_title = "Predicted Wickets"
+            gradient = "linear-gradient(135deg,#7c3aed,#ec4899)"
 
-            shap_dict = {}
-            for f in numeric_features_existing:
-                if feature_names_pipeline is not None:
-                    idxs = [i for i, name in enumerate(feature_names_pipeline) if f in name]
-                    shap_dict[f] = shap_values_row[0].values[idxs].sum()
-                else:
-                    shap_dict[f] = shap_values_row[0].values[0]
+        if not df.empty:
 
-            shap_explanation = shap.Explanation(
-                values=np.array(list(shap_dict.values())),
-                base_values=shap_values_row[0].base_values,
-                data=np.array([X_row[f].values[0] for f in numeric_features_existing]),
-                feature_names=numeric_features_existing
+            latest = df.iloc[-1:]
+            X_input = latest.drop(columns=[target_col])
+            X_processed = pipeline.transform(X_input)
+
+            raw_pred = model.predict(X_processed)[0]
+            display_pred = round(float(raw_pred), 2)
+
+            std_dev = compute_uncertainty(model, pipeline, df, target_col)
+            fig_dist, lower, upper = probability_distribution(raw_pred, std_dev, label)
+
+            row1_col1, row1_col2 = st.columns([1.5,1], gap="large")
+
+            with row1_col1:
+                st.markdown(f"### 🎯 {label} Prediction Distribution")
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.plotly_chart(fig_dist, use_container_width=True)
+
+            with row1_col2:
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                st.markdown(f"""
+                <div style="
+                    background:{gradient};
+                    padding:50px;
+                    border-radius:24px;
+                    text-align:center;
+                    color:white;
+                    box-shadow:0px 12px 30px rgba(0,0,0,0.35);
+                    margin-bottom:30px;">
+                    <h3>{card_title}</h3>
+                    <h1 style="font-size:60px;">{display_pred}</h1>
+                </div>
+                """, unsafe_allow_html=True)
+
+                st.markdown(f"""
+                <div style="
+                    background:#111827;
+                    padding:25px;
+                    border-radius:18px;
+                    text-align:center;
+                    color:white;">
+                    <h4>95% Confidence Interval</h4>
+                    <p style="font-size:20px;">
+                        {round(lower,2)} to {round(upper,2)}
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+
+            st.markdown("<br><br>", unsafe_allow_html=True)
+
+            row2_col1, row2_col2 = st.columns(2, gap="large")
+
+            with row2_col1:
+                st.markdown("### 🔍 Feature Impact (Local SHAP)")
+                st.markdown("<br>", unsafe_allow_html=True)
+                shap_fig = shap_local_explanation(model, pipeline, X_processed)
+                st.plotly_chart(shap_fig, use_container_width=True)
+
+            with row2_col2:
+                st.markdown("### 📉 Residual Analysis")
+                st.markdown("<br>", unsafe_allow_html=True)
+                residual_fig = residual_plot(model, pipeline, df, target_col=target_col)
+                st.plotly_chart(residual_fig, use_container_width=True)
+
+            st.markdown("<br><br>", unsafe_allow_html=True)
+
+            st.markdown("### 🐝 Global Feature Importance (SHAP Beeswarm)")
+            st.markdown("<br>", unsafe_allow_html=True)
+            beeswarm_fig = shap_beeswarm_plot(model, pipeline, df, target_col=target_col)
+            st.plotly_chart(beeswarm_fig, use_container_width=True)
+
+            st.markdown("<br><br>", unsafe_allow_html=True)
+
+            # =============================
+            # PDF DOWNLOAD
+            # =============================
+            buffer = BytesIO()
+            doc = SimpleDocTemplate(buffer, pagesize=A4)
+            elements = []
+
+            styles = getSampleStyleSheet()
+            title_style = styles["Heading1"]
+            normal_style = styles["Normal"]
+
+            elements.append(Paragraph("Performance Prediction Report", title_style))
+            elements.append(Spacer(1, 0.5 * inch))
+
+            report_data = [
+                ["Role", role],
+                ["Player", player],
+                ["Venue", venue],
+                [card_title, str(display_pred)],
+                ["Confidence Interval", f"{round(lower,2)} to {round(upper,2)}"]
+            ]
+
+            table = Table(report_data, colWidths=[2.5*inch, 3*inch])
+            table.setStyle(TableStyle([
+                ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
+                ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
+                ("FONTNAME", (0,0), (-1,-1), "Helvetica"),
+                ("FONTSIZE", (0,0), (-1,-1), 10),
+                ("ALIGN", (0,0), (-1,-1), "CENTER")
+            ]))
+
+            elements.append(table)
+            doc.build(elements)
+
+            pdf = buffer.getvalue()
+            buffer.close()
+
+            st.download_button(
+                label="📄 Download Prediction Report (PDF)",
+                data=pdf,
+                file_name="prediction_report.pdf",
+                mime="application/pdf"
             )
 
-            fig_shap, ax_shap = plt.subplots(figsize=(8,5))
-            shap.plots.waterfall(shap_explanation, show=False)
-            st.pyplot(fig_shap)
-            plt.clf()
+        else:
+            st.warning("No data available for selected player and venue.")
 
-            # SHAP FEATURE IMPORTANCE (Bar Chart)
-            st.subheader(f"{player_name} - SHAP Feature Importance (Bar Chart)")
-            shap_abs = np.abs(shap_explanation.values)
-            feature_names = shap_explanation.feature_names
 
-            fig_bar, ax_bar = plt.subplots(figsize=(8,5))
-            ax_bar.barh(feature_names, shap_abs, color='orange')
-            ax_bar.set_xlabel("Absolute SHAP Value")
-            ax_bar.set_title("Feature Contribution for this Prediction")
-            ax_bar.invert_yaxis()
-            st.pyplot(fig_bar)
-            plt.clf()
+       
+# ==========================================================
+# ANALYTICS TAB
+# ==========================================================
+with tab3:
 
-        except Exception as e:
-            st.write("Player SHAP explanation not available:", e)
+    st.header("Global Model Analysis")
 
-        # RESIDUALS vs PREDICTED
-        st.subheader(f"{player_name} - Residuals vs Predicted Runs")
-        residuals = y_actual_player - y_pred_player
-        fig_resid, ax_resid = plt.subplots()
-        ax_resid.scatter(y_pred_player, residuals, color='purple')
-        ax_resid.axhline(0, linestyle="--", color='black')
-        ax_resid.set_xlabel("Predicted Runs")
-        ax_resid.set_ylabel("Residuals")
-        st.pyplot(fig_resid)
-        plt.clf()
+    model_choice = st.radio(
+        "Select Model",
+        ["Runs Model", "Wickets Model"]
+    )
+
+    if model_choice == "Runs Model":
+        df = batsman_df
+        target = "runs_next_match"
+        model = runs_model
+        pipeline = runs_pipeline
+    else:
+        df = bowler_df
+        target = "wickets_next_match"
+        model = wickets_model
+        pipeline = wickets_pipeline
+
+    X = df.drop(columns=[target])
+    y = df[target]
+    X_processed = pipeline.transform(X)
+    y_pred = model.predict(X_processed)
+
+    # Actual vs Predicted
+    fig1 = px.scatter(
+        x=y,
+        y=y_pred,
+        labels={"x": "Actual", "y": "Predicted"},
+        template="plotly_dark",
+        title="Actual vs Predicted"
+    )
+    st.plotly_chart(fig1, use_container_width=True)
+
+    # Residuals
+    residuals = y - y_pred
+
+    fig2 = px.histogram(
+        residuals,
+        nbins=40,
+        template="plotly_dark",
+        title="Residual Distribution"
+    )
+    st.plotly_chart(fig2, use_container_width=True)
+
+    # Global SHAP
+    sample = df.sample(300, random_state=42)
+    X_sample = sample.drop(columns=[target])
+    X_sample_processed = pipeline.transform(X_sample)
+
+    if hasattr(X_sample_processed, "toarray"):
+        X_sample_processed = X_sample_processed.toarray()
+
+    explainer = shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(X_sample_processed)
+
+    feature_names = pipeline.get_feature_names_out()
+    numeric_indices = [
+        i for i, name in enumerate(feature_names)
+        if name.startswith("num__")
+    ]
+
+    shap_values_num = shap_values[:, numeric_indices]
+    clean_names = [
+        feature_names[i].replace("num__", "")
+        for i in numeric_indices
+    ]
+
+    shap_df = pd.DataFrame(shap_values_num, columns=clean_names)
+    shap_long = shap_df.melt(var_name="Feature", value_name="SHAP Value")
+
+    fig_bee = px.strip(
+        shap_long,
+        x="SHAP Value",
+        y="Feature",
+        orientation="h",
+        template="plotly_dark",
+        title="Global SHAP Beeswarm"
+    )
+
+    fig_bee.update_layout(height=700)
+
+    st.plotly_chart(fig_bee, use_container_width=True)
