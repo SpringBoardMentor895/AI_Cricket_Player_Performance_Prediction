@@ -20,3 +20,12 @@ Week 3–4: Feature Engineering & Preprocessing
 • Train-test split (time-series aware).
 • Deliverable: Final feature-engineered dataset (dataset.csv),
    notebook (02_FeatureEngineering.ipynb), and saved preprocessor (feature_pipeline.pkl).
+
+ Week 5–6: Model Development & Evaluation
+• Establish baseline model (e.g., 10-match rolling average).
+• Train models: Random Forest, XGBoost, LightGBM.
+• Hyperparameter tuning: GridSearchCV or Optuna.
+• Evaluation: RMSE, MAE, R2
+. Analyze feature importance using SHAP.
+• Deliverable: Trained model artifacts (xgb_model.joblib),
+ notebook (03_ModelTraining.ipynb) with metrics and tuning logs.
