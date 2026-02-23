@@ -38,3 +38,6 @@ Week 7–8: Dashboard, Deployment & Finalization
 • (Optional) Deploy app to Streamlit Cloud.
 • Deliverable: Runnable Streamlit app (streamlit_app.py)
   and final README.md
+
+<img width="1302" height="405" alt="image" src="https://github.com/user-attachments/assets/5780722c-2146-4736-b764-1fd7afe6cd4a" />
+
