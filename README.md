@@ -29,3 +29,12 @@ Week 3–4: Feature Engineering & Preprocessing
 . Analyze feature importance using SHAP.
 • Deliverable: Trained model artifacts (xgb_model.joblib),
  notebook (03_ModelTraining.ipynb) with metrics and tuning logs.
+
+Week 7–8: Dashboard, Deployment & Finalization
+• Build Streamlit dashboard: inputs, prediction logic, and
+  visualizations.
+• Integrate model and preprocessor into the dashboard.
+• Finalize documentation and clean repository.
+• (Optional) Deploy app to Streamlit Cloud.
+• Deliverable: Runnable Streamlit app (streamlit_app.py)
+  and final README.md
